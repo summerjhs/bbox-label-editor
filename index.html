@@ -19,6 +19,8 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 .btn-primary:hover { background: #d63851; }
 .btn-save { background: #4ecdc4; color: #1a1a2e; font-weight: bold; }
 .btn-save:hover { background: #45b7aa; }
+.btn-toggle { font-size: 11px; padding: 4px 10px; }
+.btn-toggle.active { background: #e94560; color: #fff; }
 .status-text { font-size: 12px; color: #aaa; margin-left: auto; }
 
 /* 메인 레이아웃 */
@@ -43,10 +45,17 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 .canvas-wrap canvas { display: block; }
 
 /* 편집 패널 */
-.edit-panel { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #16213e; border-top: 1px solid #333; flex-shrink: 0; min-height: 44px; }
-.edit-panel .info { font-size: 12px; color: #ccc; flex: 1; }
+.edit-panel { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #16213e; border-top: 1px solid #333; flex-shrink: 0; min-height: 44px; flex-wrap: wrap; }
+.edit-panel .info { font-size: 12px; color: #ccc; flex: 1; min-width: 200px; }
 .edit-panel input[type="text"] { width: 42px; background: #1a1a2e; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 4px; font-size: 14px; text-align: center; text-transform: uppercase; outline: none; }
 .edit-panel input[type="text"]:focus { border-color: #e94560; }
+
+/* 좌표 편집 패널 */
+.coord-panel { display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: #0d1117; border-top: 1px solid #222; flex-shrink: 0; min-height: 10px; }
+.coord-panel label { font-size: 11px; color: #888; }
+.coord-panel input[type="number"] { width: 60px; background: #16213e; color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 3px 5px; font-size: 11px; outline: none; }
+.coord-panel input[type="number"]:focus { border-color: #4ecdc4; }
+.coord-panel input:disabled { background: #111; color: #555; }
 
 /* VIN 스트립 */
 .vin-strip { display: flex; gap: 3px; padding: 4px 12px; background: #0d1117; border-top: 1px solid #222; flex-shrink: 0; min-height: 10px; flex-wrap: wrap; }
@@ -92,10 +101,18 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
         </div>
         <div class="edit-panel">
             <span class="info" id="boxInfo">폴더를 선택하고 이미지를 클릭하세요</span>
+            <button class="btn btn-toggle active" id="btnViewMode" onclick="toggleViewMode()">전체 박스</button>
             <label style="font-size:12px;color:#aaa;">새 라벨:</label>
             <input type="text" id="labelInput" maxlength="1" disabled>
             <button class="btn btn-primary" id="btnApply" disabled onclick="applyLabel()">적용</button>
             <button class="btn" id="btnNextBox" disabled onclick="nextBox()">다음 박스 &rarr;</button>
+        </div>
+        <div class="coord-panel" id="coordPanel">
+            <label>xmin:</label><input type="number" id="coordXmin" disabled>
+            <label>ymin:</label><input type="number" id="coordYmin" disabled>
+            <label>xmax:</label><input type="number" id="coordXmax" disabled>
+            <label>ymax:</label><input type="number" id="coordYmax" disabled>
+            <button class="btn" id="btnCoordApply" disabled onclick="applyCoords()" style="font-size:11px;padding:3px 10px;">좌표 적용</button>
         </div>
         <div class="vin-strip" id="vinStrip"></div>
     </div>
@@ -114,8 +131,9 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 let entries = [];       // {filename, imageFile, xmlFile, xmlText, boxes[], dirty, xmlDoc}
 let currentIndex = -1;
 let selectedBox = null;
-let undoStack = [];     // {entryIdx, boxIdx, oldLabel, newLabel}
+let undoStack = [];     // {entryIdx, boxIdx, oldLabel, newLabel, oldCoords?}
 let currentImage = null;
+let viewMode = 'all';  // 'all' = 전체 박스, 'single' = 선택된 박스만
 
 const COLORS = [
     "#FF4444","#44FF44","#4488FF","#FFFF44","#FF44FF","#44FFFF",
@@ -268,6 +286,7 @@ async function selectEntry(idx) {
     document.getElementById('labelInput').disabled = true;
     document.getElementById('btnApply').disabled = true;
     document.getElementById('btnNextBox').disabled = !hasBoxes;
+    setCoordInputsEnabled(false);
 
     if (!entry.xmlFile) {
         document.getElementById('boxInfo').textContent = '어노테이션 데이터 없음 (작업 불가)';
@@ -319,6 +338,9 @@ function drawCanvas() {
     entry.boxes.forEach(b => { if (!(b.label in colorMap)) { colorMap[b.label] = COLORS[ci++ % COLORS.length]; } });
 
     entry.boxes.forEach((box, i) => {
+        // single 모드: 선택된 박스만 그림
+        if (viewMode === 'single' && selectedBox !== null && i !== selectedBox) return;
+
         const x1 = ox + box.xmin * scale;
         const y1 = oy + box.ymin * scale;
         const x2 = ox + box.xmax * scale;
@@ -408,6 +430,12 @@ function selectBox(idx) {
     document.getElementById('labelInput').value = box.label;
     document.getElementById('labelInput').select();
     document.getElementById('labelInput').focus();
+    // 좌표 편집 필드 업데이트
+    document.getElementById('coordXmin').value = box.xmin;
+    document.getElementById('coordYmin').value = box.ymin;
+    document.getElementById('coordXmax').value = box.xmax;
+    document.getElementById('coordYmax').value = box.ymax;
+    setCoordInputsEnabled(true);
     updateVinStrip();
     drawCanvas();
 }
@@ -416,12 +444,12 @@ function deselectBox() {
     selectedBox = null;
     document.getElementById('labelInput').disabled = true;
     document.getElementById('labelInput').value = '';
-    document.getElementById('btnApply').disabled = false;
+    document.getElementById('btnApply').disabled = true;
+    setCoordInputsEnabled(false);
     if (currentIndex >= 0) {
         const entry = entries[currentIndex];
         document.getElementById('boxInfo').textContent = entry.xmlFile ? '박스를 클릭하여 선택하세요' : '어노테이션 데이터 없음 (작업 불가)';
     }
-    document.getElementById('btnApply').disabled = true;
     updateVinStrip();
     drawCanvas();
 }
@@ -497,13 +525,87 @@ function updateVinStrip() {
     });
 }
 
+// ── 보기 모드 토글 ────────────────────────────────────────
+function toggleViewMode() {
+    viewMode = viewMode === 'all' ? 'single' : 'all';
+    const btn = document.getElementById('btnViewMode');
+    btn.textContent = viewMode === 'all' ? '전체 박스' : '선택 박스만';
+    btn.className = viewMode === 'all' ? 'btn btn-toggle active' : 'btn btn-toggle';
+    drawCanvas();
+}
+
+// ── 좌표 편집 ─────────────────────────────────────────────
+function setCoordInputsEnabled(enabled) {
+    ['coordXmin','coordYmin','coordXmax','coordYmax'].forEach(id => {
+        document.getElementById(id).disabled = !enabled;
+        if (!enabled) document.getElementById(id).value = '';
+    });
+    document.getElementById('btnCoordApply').disabled = !enabled;
+}
+
+function applyCoords() {
+    if (selectedBox === null || currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    const box = entry.boxes[selectedBox];
+
+    const newXmin = parseInt(document.getElementById('coordXmin').value);
+    const newYmin = parseInt(document.getElementById('coordYmin').value);
+    const newXmax = parseInt(document.getElementById('coordXmax').value);
+    const newYmax = parseInt(document.getElementById('coordYmax').value);
+
+    if (isNaN(newXmin) || isNaN(newYmin) || isNaN(newXmax) || isNaN(newYmax)) {
+        alert('모든 좌표를 숫자로 입력하세요.'); return;
+    }
+    if (newXmin >= newXmax || newYmin >= newYmax) {
+        alert('xmin < xmax, ymin < ymax 이어야 합니다.'); return;
+    }
+
+    // undo 용 이전 좌표 저장
+    const oldCoords = { xmin: box.xmin, ymin: box.ymin, xmax: box.xmax, ymax: box.ymax };
+    box.xmin = newXmin; box.ymin = newYmin; box.xmax = newXmax; box.ymax = newYmax;
+    box.modified = true;
+    entry.dirty = true;
+
+    // XML DOM 업데이트
+    if (entry.xmlDoc) {
+        const objects = entry.xmlDoc.querySelectorAll('object');
+        if (objects[box.index]) {
+            const bndbox = objects[box.index].querySelector('bndbox');
+            if (bndbox) {
+                bndbox.querySelector('xmin').textContent = newXmin;
+                bndbox.querySelector('ymin').textContent = newYmin;
+                bndbox.querySelector('xmax').textContent = newXmax;
+                bndbox.querySelector('ymax').textContent = newYmax;
+            }
+        }
+    }
+
+    undoStack.push({ entryIdx: currentIndex, boxIdx: selectedBox, oldLabel: box.label, newLabel: box.label, oldCoords, newCoords: { xmin: newXmin, ymin: newYmin, xmax: newXmax, ymax: newYmax } });
+    updateListItem(currentIndex);
+    updateStatusFromEntries();
+    drawCanvas();
+
+    document.getElementById('boxInfo').textContent =
+        `박스 #${selectedBox+1}/${entry.boxes.length}  |  현재 라벨: [${box.label}]  |  위치: (${box.xmin},${box.ymin})-(${box.xmax},${box.ymax})`;
+}
+
 // ── 되돌리기 ──────────────────────────────────────────────
 function undo() {
     if (!undoStack.length) return;
-    const { entryIdx, boxIdx, oldLabel } = undoStack.pop();
+    const action = undoStack.pop();
+    const { entryIdx, boxIdx, oldLabel } = action;
     const entry = entries[entryIdx];
     const box = entry.boxes[boxIdx];
     box.label = oldLabel;
+
+    // 좌표 복원
+    if (action.oldCoords) {
+        box.xmin = action.oldCoords.xmin;
+        box.ymin = action.oldCoords.ymin;
+        box.xmax = action.oldCoords.xmax;
+        box.ymax = action.oldCoords.ymax;
+    }
+
     box.modified = false;
 
     // XML DOM 복원
@@ -512,6 +614,15 @@ function undo() {
         if (objects[box.index]) {
             const nameEl = objects[box.index].querySelector('name');
             if (nameEl) nameEl.textContent = oldLabel;
+            if (action.oldCoords) {
+                const bndbox = objects[box.index].querySelector('bndbox');
+                if (bndbox) {
+                    bndbox.querySelector('xmin').textContent = action.oldCoords.xmin;
+                    bndbox.querySelector('ymin').textContent = action.oldCoords.ymin;
+                    bndbox.querySelector('xmax').textContent = action.oldCoords.xmax;
+                    bndbox.querySelector('ymax').textContent = action.oldCoords.ymax;
+                }
+            }
         }
     }
 
@@ -643,6 +754,8 @@ document.addEventListener('keydown', (e) => {
         e.shiftKey ? prevBox() : nextBox();
     } else if (e.key === 'Escape') {
         deselectBox();
+    } else if (e.key === 'v') {
+        toggleViewMode();
     }
 });
 </script>
