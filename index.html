@@ -636,20 +636,55 @@ function undo() {
     }
 }
 
+// ── 원본 XML 보존 저장 ────────────────────────────────────
+function buildModifiedXml(entry) {
+    // 원본 텍스트에서 <object>...</object> 블록만 찾아 수정된 값을 텍스트 치환
+    let xml = entry.xmlText;
+
+    // 수정된 박스를 원본 index 기준으로 모아둠
+    const modifiedByIndex = {};
+    entry.boxes.forEach(box => {
+        if (box.modified) modifiedByIndex[box.index] = box;
+    });
+
+    if (Object.keys(modifiedByIndex).length === 0) return xml;
+
+    // <object>...</object> 블록을 순서대로 찾아서 치환
+    let objIdx = 0;
+    xml = xml.replace(/<object>([\s\S]*?)<\/object>/g, (fullMatch, inner) => {
+        const curIdx = objIdx++;
+        const box = modifiedByIndex[curIdx];
+        if (!box) return fullMatch; // 수정 안 된 블록은 그대로
+
+        let result = inner;
+        // <name> 치환
+        result = result.replace(/<name>[^<]*<\/name>/, `<name>${box.label}</name>`);
+        // <bndbox> 내부 좌표 치환
+        result = result.replace(/<xmin>[^<]*<\/xmin>/, `<xmin>${box.xmin}</xmin>`);
+        result = result.replace(/<ymin>[^<]*<\/ymin>/, `<ymin>${box.ymin}</ymin>`);
+        result = result.replace(/<xmax>[^<]*<\/xmax>/, `<xmax>${box.xmax}</xmax>`);
+        result = result.replace(/<ymax>[^<]*<\/ymax>/, `<ymax>${box.ymax}</ymax>`);
+
+        return `<object>${result}</object>`;
+    });
+
+    return xml;
+}
+
 // ── 저장 ──────────────────────────────────────────────────
 function saveAll() {
-    const dirtyEntries = entries.filter(e => e.dirty && e.xmlDoc);
+    const dirtyEntries = entries.filter(e => e.dirty && e.xmlText);
     if (!dirtyEntries.length) { alert('수정된 내용이 없습니다.'); return; }
-    // 개별 XML 다운로드
     dirtyEntries.forEach(entry => {
-        const serializer = new XMLSerializer();
-        const xmlStr = '<?xml version="1.0" encoding="utf-8"?>\n' + serializer.serializeToString(entry.xmlDoc);
+        const xmlStr = buildModifiedXml(entry);
         const blob = new Blob([xmlStr], { type: 'application/xml' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = entry.filename.replace(/\.[^.]+$/, '.xml');
         a.click();
         URL.revokeObjectURL(a.href);
+        // 저장 후 원본 텍스트를 갱신 (이후 추가 수정 시 기준)
+        entry.xmlText = xmlStr;
         entry.dirty = false;
         entry.boxes.forEach(b => b.modified = false);
     });
@@ -663,12 +698,11 @@ function saveAll() {
 }
 
 async function downloadAll() {
-    const dirtyEntries = entries.filter(e => e.dirty && e.xmlDoc);
+    const dirtyEntries = entries.filter(e => e.dirty && e.xmlText);
     if (!dirtyEntries.length) { alert('수정된 내용이 없습니다.'); return; }
 
     // ZIP 미지원 시 개별 다운로드로 fallback
     if (typeof JSZip === 'undefined') {
-        // 동적 로드 시도
         try {
             await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
         } catch {
@@ -679,8 +713,7 @@ async function downloadAll() {
 
     const zip = new JSZip();
     dirtyEntries.forEach(entry => {
-        const serializer = new XMLSerializer();
-        const xmlStr = '<?xml version="1.0" encoding="utf-8"?>\n' + serializer.serializeToString(entry.xmlDoc);
+        const xmlStr = buildModifiedXml(entry);
         const xmlName = entry.filename.replace(/\.[^.]+$/, '.xml');
         zip.file(xmlName, xmlStr);
     });
@@ -693,6 +726,7 @@ async function downloadAll() {
     URL.revokeObjectURL(a.href);
 
     dirtyEntries.forEach(entry => {
+        entry.xmlText = buildModifiedXml(entry);
         entry.dirty = false;
         entry.boxes.forEach(b => b.modified = false);
     });
