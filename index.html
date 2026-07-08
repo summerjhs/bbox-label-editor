@@ -464,14 +464,14 @@ function drawCanvas() {
 
         const isSel = (i === selectedBox);
         let color = isSel ? '#FFFFFF' : (colorMap[box.label] || '#CCCCCC');
-        let lw = isSel ? 3 : 2;
+        let lw = 1;
 
         // 문제 플래그 박스 강조
         if (box.flagged) {
             ctx.fillStyle = 'rgba(255, 45, 45, 0.22)';
             ctx.fillRect(x1, y1, bw, bh);
             color = '#ff2d2d';
-            lw = 4;
+            lw = 1;
         }
 
         ctx.strokeStyle = color;
