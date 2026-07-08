@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BBox Label Editor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* 상단 바 */
+.top-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #16213e; border-bottom: 1px solid #333; flex-shrink: 0; }
+.top-bar label { font-size: 13px; color: #aaa; }
+.top-bar input[type="file"] { display: none; }
+.btn { background: #0f3460; color: #e0e0e0; border: none; border-radius: 4px; padding: 6px 14px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: #1a5276; }
+.btn:disabled { background: #333; color: #666; cursor: default; }
+.btn-primary { background: #e94560; color: #fff; font-weight: bold; }
+.btn-primary:hover { background: #d63851; }
+.btn-save { background: #4ecdc4; color: #1a1a2e; font-weight: bold; }
+.btn-save:hover { background: #45b7aa; }
+.btn-toggle { font-size: 11px; padding: 4px 10px; }
+.btn-toggle.active { background: #e94560; color: #fff; }
+.status-text { font-size: 12px; color: #aaa; margin-left: auto; }
+
+/* 메인 레이아웃 */
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* 왼쪽: 파일 목록 */
+.sidebar { width: 280px; min-width: 200px; display: flex; flex-direction: column; border-right: 1px solid #333; background: #16213e; flex-shrink: 0; }
+.search-box { padding: 6px; border-bottom: 1px solid #333; }
+.search-box input { width: 100%; background: #1a1a2e; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; font-size: 12px; outline: none; }
+.search-box input:focus { border-color: #4ecdc4; }
+.file-list { flex: 1; overflow-y: auto; }
+.file-item { padding: 5px 10px; font-size: 11px; cursor: pointer; border-bottom: 1px solid #1a1a2e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-item:hover { background: #1a3a5c; }
+.file-item.active { background: #0f3460; }
+.file-item.unmatched { color: #888; }
+.file-item.dirty { color: #4ecdc4; }
+.counter { text-align: center; padding: 6px; font-size: 12px; color: #888; border-top: 1px solid #333; flex-shrink: 0; }
+
+/* 오른쪽: 캔버스 + 편집 */
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #111; }
+.canvas-wrap canvas { display: block; }
+
+/* 편집 패널 */
+.edit-panel { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #16213e; border-top: 1px solid #333; flex-shrink: 0; min-height: 44px; flex-wrap: wrap; }
+.edit-panel .info { font-size: 12px; color: #ccc; flex: 1; min-width: 200px; }
+.edit-panel input[type="text"] { width: 42px; background: #1a1a2e; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 4px; font-size: 14px; text-align: center; text-transform: uppercase; outline: none; }
+.edit-panel input[type="text"]:focus { border-color: #e94560; }
+
+/* 좌표 편집 패널 */
+.coord-panel { display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: #0d1117; border-top: 1px solid #222; flex-shrink: 0; min-height: 10px; }
+.coord-panel label { font-size: 11px; color: #888; }
+.coord-panel input[type="number"] { width: 60px; background: #16213e; color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 3px 5px; font-size: 11px; outline: none; }
+.coord-panel input[type="number"]:focus { border-color: #4ecdc4; }
+.coord-panel input:disabled { background: #111; color: #555; }
+
+/* VIN 스트립 */
+.vin-strip { display: flex; gap: 3px; padding: 4px 12px; background: #0d1117; border-top: 1px solid #222; flex-shrink: 0; min-height: 10px; flex-wrap: wrap; }
+.vin-char { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: #16213e; color: #e0e0e0; border: 1px solid #444; border-radius: 3px; font-size: 13px; font-weight: bold; font-family: Consolas, monospace; cursor: pointer; flex-shrink: 0; }
+.vin-char:hover { background: #1a5276; border-color: #4ecdc4; }
+.vin-char.selected { background: #e94560; color: #fff; border-color: #fff; }
+
+/* 하단 */
+.bottom-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: #16213e; border-top: 1px solid #333; flex-shrink: 0; }
+.bottom-bar .status { flex: 1; font-size: 12px; color: #aaa; }
+
+/* 스크롤바 */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #1a1a2e; }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- 상단 바 -->
+<div class="top-bar">
+    <label>폴더 선택:</label>
+    <input type="file" id="folderInput" webkitdirectory multiple>
+    <button class="btn btn-primary" onclick="document.getElementById('folderInput').click()">폴더 열기</button>
+    <span class="status-text" id="topStatus">폴더를 선택하세요</span>
+</div>
+
+<!-- 메인 -->
+<div class="main">
+    <!-- 왼쪽 사이드바 -->
+    <div class="sidebar">
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="검색 (파일명)">
+        </div>
+        <div class="file-list" id="fileList"></div>
+        <div class="counter" id="counter">0 / 0</div>
+    </div>
+
+    <!-- 오른쪽 -->
+    <div class="content">
+        <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="canvas"></canvas>
+        </div>
+        <div class="edit-panel">
+            <span class="info" id="boxInfo">폴더를 선택하고 이미지를 클릭하세요</span>
+            <button class="btn btn-toggle active" id="btnViewMode" onclick="toggleViewMode()">전체 박스</button>
+            <label style="font-size:12px;color:#aaa;">새 라벨:</label>
+            <input type="text" id="labelInput" maxlength="1" disabled>
+            <button class="btn btn-primary" id="btnApply" disabled onclick="applyLabel()">적용</button>
+            <button class="btn" id="btnNextBox" disabled onclick="nextBox()">다음 박스 &rarr;</button>
+        </div>
+        <div class="coord-panel" id="coordPanel">
+            <label>xmin:</label><input type="number" id="coordXmin" disabled>
+            <label>ymin:</label><input type="number" id="coordYmin" disabled>
+            <label>xmax:</label><input type="number" id="coordXmax" disabled>
+            <label>ymax:</label><input type="number" id="coordYmax" disabled>
+            <button class="btn" id="btnCoordApply" disabled onclick="applyCoords()" style="font-size:11px;padding:3px 10px;">좌표 적용</button>
+        </div>
+        <div class="vin-strip" id="vinStrip"></div>
+    </div>
+</div>
+
+<!-- 하단 -->
+<div class="bottom-bar">
+    <span class="status" id="bottomStatus">준비</span>
+    <button class="btn btn-save" onclick="saveAll()">&#128190; 저장 (Ctrl+S)</button>
+    <button class="btn" onclick="undo()">&#8617; 되돌리기 (Ctrl+Z)</button>
+    <button class="btn" onclick="downloadAll()">&#128229; ZIP 다운로드</button>
+</div>
+
+<script>
+// ── 상태 ──────────────────────────────────────────────────
+let entries = [];       // {filename, imageFile, xmlFile, xmlText, boxes[], dirty, xmlDoc}
+let currentIndex = -1;
+let selectedBox = null;
+let undoStack = [];     // {entryIdx, boxIdx, oldLabel, newLabel, oldCoords?}
+let currentImage = null;
+let viewMode = 'all';  // 'all' = 전체 박스, 'single' = 선택된 박스만
+
+const COLORS = [
+    "#FF4444","#44FF44","#4488FF","#FFFF44","#FF44FF","#44FFFF",
+    "#FF8844","#8844FF","#4488FF","#FF4488","#88FF44","#44FF88",
+];
+
+// ── 폴더 로드 ─────────────────────────────────────────────
+document.getElementById('folderInput').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+
+    const imageFiles = {};
+    const xmlFiles = {};
+
+    for (const f of files) {
+        const name = f.name;
+        const lower = name.toLowerCase();
+        const base = name.replace(/\.[^.]+$/, '');
+        if (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.bmp')) {
+            imageFiles[base] = f;
+        } else if (lower.endsWith('.xml')) {
+            xmlFiles[base] = f;
+        }
+    }
+
+    entries = [];
+    let matched = 0;
+
+    for (const [base, imgFile] of Object.entries(imageFiles).sort((a,b) => a[0].localeCompare(b[0]))) {
+        const xmlFile = xmlFiles[base] || null;
+        const entry = {
+            filename: imgFile.name,
+            imageFile: imgFile,
+            xmlFile: xmlFile,
+            xmlText: null,
+            xmlDoc: null,
+            boxes: [],
+            dirty: false,
+        };
+
+        if (xmlFile) {
+            const text = await xmlFile.text();
+            entry.xmlText = text;
+            entry.xmlDoc = new DOMParser().parseFromString(text, 'text/xml');
+            entry.boxes = parseBoxes(entry.xmlDoc);
+            matched++;
+        }
+
+        entries.push(entry);
+    }
+
+    // 매칭된 것 먼저, 미매칭은 뒤
+    entries.sort((a, b) => {
+        if (a.xmlFile && !b.xmlFile) return -1;
+        if (!a.xmlFile && b.xmlFile) return 1;
+        return a.filename.localeCompare(b.filename);
+    });
+
+    undoStack = [];
+    currentIndex = -1;
+    selectedBox = null;
+    populateList();
+    updateStatus(matched, entries.length - matched);
+    document.getElementById('topStatus').textContent = `${entries.length}개 이미지 로드 완료`;
+
+    if (entries.length > 0) selectEntry(0);
+});
+
+function parseBoxes(xmlDoc) {
+    const boxes = [];
+    const objects = xmlDoc.querySelectorAll('object');
+    objects.forEach((obj, i) => {
+        const name = obj.querySelector('name');
+        const bndbox = obj.querySelector('bndbox');
+        if (!name || !bndbox) return;
+        boxes.push({
+            index: i,
+            xmin: parseFloat(bndbox.querySelector('xmin')?.textContent || 0),
+            ymin: parseFloat(bndbox.querySelector('ymin')?.textContent || 0),
+            xmax: parseFloat(bndbox.querySelector('xmax')?.textContent || 0),
+            ymax: parseFloat(bndbox.querySelector('ymax')?.textContent || 0),
+            label: name.textContent || '',
+            modified: false,
+        });
+    });
+    boxes.sort((a, b) => a.xmin - b.xmin);
+    return boxes;
+}
+
+// ── 파일 목록 ─────────────────────────────────────────────
+function populateList() {
+    const list = document.getElementById('fileList');
+    list.innerHTML = '';
+    entries.forEach((entry, i) => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        if (!entry.xmlFile) div.className += ' unmatched';
+        if (entry.dirty) div.className += ' dirty';
+        div.textContent = (!entry.xmlFile ? '[작업불가] ' : '') + (entry.dirty ? '* ' : '') + entry.filename;
+        div.dataset.index = i;
+        div.onclick = () => selectEntry(i);
+        list.appendChild(div);
+    });
+}
+
+function updateListItem(idx) {
+    const items = document.querySelectorAll('#fileList .file-item');
+    if (!items[idx]) return;
+    const entry = entries[idx];
+    let cls = 'file-item';
+    if (!entry.xmlFile) cls += ' unmatched';
+    if (entry.dirty) cls += ' dirty';
+    if (idx === currentIndex) cls += ' active';
+    items[idx].className = cls;
+    items[idx].textContent = (!entry.xmlFile ? '[작업불가] ' : '') + (entry.dirty ? '* ' : '') + entry.filename;
+}
+
+document.getElementById('searchInput').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('#fileList .file-item').forEach((el, i) => {
+        el.style.display = entries[i].filename.toLowerCase().includes(q) ? '' : 'none';
+    });
+});
+
+// ── 이미지 표시 ───────────────────────────────────────────
+async function selectEntry(idx) {
+    if (idx < 0 || idx >= entries.length) return;
+
+    // 이전 active 해제
+    document.querySelectorAll('#fileList .file-item').forEach(el => el.classList.remove('active'));
+    const items = document.querySelectorAll('#fileList .file-item');
+    if (items[idx]) { items[idx].classList.add('active'); items[idx].scrollIntoView({block:'nearest'}); }
+
+    currentIndex = idx;
+    selectedBox = null;
+    const entry = entries[idx];
+
+    // 이미지 로드
+    const url = URL.createObjectURL(entry.imageFile);
+    const img = new Image();
+    img.onload = () => {
+        currentImage = img;
+        drawCanvas();
+        URL.revokeObjectURL(url);
+    };
+    img.src = url;
+
+    // 편집 상태
+    const hasBoxes = entry.boxes.length > 0 && entry.xmlFile;
+    document.getElementById('labelInput').disabled = true;
+    document.getElementById('btnApply').disabled = true;
+    document.getElementById('btnNextBox').disabled = !hasBoxes;
+    setCoordInputsEnabled(false);
+
+    if (!entry.xmlFile) {
+        document.getElementById('boxInfo').textContent = '어노테이션 데이터 없음 (작업 불가)';
+    } else if (entry.boxes.length === 0) {
+        document.getElementById('boxInfo').textContent = '어노테이션 없음 (빈 XML)';
+    } else {
+        document.getElementById('boxInfo').textContent = '박스를 클릭하여 선택하세요';
+    }
+
+    updateVinStrip();
+    document.getElementById('counter').textContent = `${idx + 1} / ${entries.length}`;
+}
+
+// ── 캔버스 그리기 ─────────────────────────────────────────
+function drawCanvas() {
+    const wrap = document.getElementById('canvasWrap');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    if (!currentImage) return;
+
+    const ww = wrap.clientWidth;
+    const wh = wrap.clientHeight;
+    canvas.width = ww;
+    canvas.height = wh;
+
+    const iw = currentImage.width;
+    const ih = currentImage.height;
+    const scale = Math.min(ww / iw, wh / ih);
+    const sw = iw * scale;
+    const sh = ih * scale;
+    const ox = (ww - sw) / 2;
+    const oy = (wh - sh) / 2;
+
+    // 저장 (히트 테스트용)
+    canvas._scale = scale;
+    canvas._ox = ox;
+    canvas._oy = oy;
+
+    ctx.clearRect(0, 0, ww, wh);
+    ctx.drawImage(currentImage, ox, oy, sw, sh);
+
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+
+    // 바운딩박스
+    const colorMap = {};
+    let ci = 0;
+    entry.boxes.forEach(b => { if (!(b.label in colorMap)) { colorMap[b.label] = COLORS[ci++ % COLORS.length]; } });
+
+    entry.boxes.forEach((box, i) => {
+        // single 모드: 선택된 박스만 그림
+        if (viewMode === 'single' && selectedBox !== null && i !== selectedBox) return;
+
+        const x1 = ox + box.xmin * scale;
+        const y1 = oy + box.ymin * scale;
+        const x2 = ox + box.xmax * scale;
+        const y2 = oy + box.ymax * scale;
+        const bw = x2 - x1;
+        const bh = y2 - y1;
+
+        const isSel = (i === selectedBox);
+        const color = isSel ? '#FFFFFF' : (colorMap[box.label] || '#CCCCCC');
+        const lw = isSel ? 3 : 2;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw;
+        ctx.strokeRect(x1, y1, bw, bh);
+
+        // 라벨 배경 + 텍스트
+        ctx.font = 'bold 12px Consolas, monospace';
+        const tm = ctx.measureText(box.label);
+        const tw = tm.width + 6;
+        const th = 16;
+        const ly = y1 - th > oy ? y1 - th : y1;
+        ctx.fillStyle = color;
+        ctx.fillRect(x1, ly, tw, th);
+        ctx.fillStyle = isSel ? '#000' : '#fff';
+        ctx.fillText(box.label, x1 + 3, ly + 12);
+
+        // 인덱스
+        ctx.fillStyle = color;
+        ctx.font = 'bold 10px Consolas';
+        ctx.fillText(String(i + 1), x2 - 12, y2 - 3);
+    });
+
+    // 작업 불가 배너
+    if (!entry.xmlFile) {
+        const bannerW = sw * 0.18;
+        ctx.fillStyle = 'rgba(220, 50, 50, 0.6)';
+        ctx.fillRect(ox, oy, bannerW, sh);
+        ctx.save();
+        ctx.translate(ox + bannerW / 2, oy + sh / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 18px "Malgun Gothic", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('작 업 불 가', 0, 6);
+        ctx.restore();
+    }
+}
+
+// 리사이즈 대응
+window.addEventListener('resize', () => { if (currentImage) drawCanvas(); });
+new ResizeObserver(() => { if (currentImage) drawCanvas(); }).observe(document.getElementById('canvasWrap'));
+
+// ── 캔버스 클릭 (박스 선택) ───────────────────────────────
+document.getElementById('canvas').addEventListener('click', (e) => {
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    if (!entry.xmlFile || !entry.boxes.length) return;
+
+    const canvas = document.getElementById('canvas');
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const mx = (cx - canvas._ox) / canvas._scale;
+    const my = (cy - canvas._oy) / canvas._scale;
+
+    // 역순 히트 테스트
+    for (let i = entry.boxes.length - 1; i >= 0; i--) {
+        const b = entry.boxes[i];
+        if (mx >= b.xmin && mx <= b.xmax && my >= b.ymin && my <= b.ymax) {
+            selectBox(i);
+            return;
+        }
+    }
+    deselectBox();
+});
+
+function selectBox(idx) {
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    if (idx >= entry.boxes.length) return;
+    selectedBox = idx;
+    const box = entry.boxes[idx];
+    document.getElementById('boxInfo').textContent =
+        `박스 #${idx+1}/${entry.boxes.length}  |  현재 라벨: [${box.label}]  |  위치: (${box.xmin},${box.ymin})-(${box.xmax},${box.ymax})`;
+    document.getElementById('labelInput').disabled = false;
+    document.getElementById('btnApply').disabled = false;
+    document.getElementById('labelInput').value = box.label;
+    document.getElementById('labelInput').select();
+    document.getElementById('labelInput').focus();
+    // 좌표 편집 필드 업데이트
+    document.getElementById('coordXmin').value = box.xmin;
+    document.getElementById('coordYmin').value = box.ymin;
+    document.getElementById('coordXmax').value = box.xmax;
+    document.getElementById('coordYmax').value = box.ymax;
+    setCoordInputsEnabled(true);
+    updateVinStrip();
+    drawCanvas();
+}
+
+function deselectBox() {
+    selectedBox = null;
+    document.getElementById('labelInput').disabled = true;
+    document.getElementById('labelInput').value = '';
+    document.getElementById('btnApply').disabled = true;
+    setCoordInputsEnabled(false);
+    if (currentIndex >= 0) {
+        const entry = entries[currentIndex];
+        document.getElementById('boxInfo').textContent = entry.xmlFile ? '박스를 클릭하여 선택하세요' : '어노테이션 데이터 없음 (작업 불가)';
+    }
+    updateVinStrip();
+    drawCanvas();
+}
+
+// ── 라벨 편집 ─────────────────────────────────────────────
+function applyLabel() {
+    if (selectedBox === null || currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    const box = entry.boxes[selectedBox];
+    const newLabel = document.getElementById('labelInput').value.trim().toUpperCase();
+
+    if (!newLabel || !/^[A-Z0-9*]$/.test(newLabel)) {
+        alert('라벨은 A-Z, 0-9, * 중 하나여야 합니다.');
+        return;
+    }
+    if (newLabel === box.label) { nextBox(); return; }
+
+    const oldLabel = box.label;
+    box.label = newLabel;
+    box.modified = true;
+    entry.dirty = true;
+
+    // XML DOM 업데이트
+    if (entry.xmlDoc) {
+        const objects = entry.xmlDoc.querySelectorAll('object');
+        if (objects[box.index]) {
+            const nameEl = objects[box.index].querySelector('name');
+            if (nameEl) nameEl.textContent = newLabel;
+        }
+    }
+
+    undoStack.push({ entryIdx: currentIndex, boxIdx: selectedBox, oldLabel, newLabel });
+    updateListItem(currentIndex);
+    updateStatusFromEntries();
+    updateVinStrip();
+    drawCanvas();
+
+    document.getElementById('boxInfo').textContent =
+        `박스 #${selectedBox+1}/${entry.boxes.length}  |  현재 라벨: [${newLabel}]  |  위치: (${box.xmin},${box.ymin})-(${box.xmax},${box.ymax})`;
+
+    nextBox();
+}
+
+function nextBox() {
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    if (!entry.boxes.length) return;
+    const next = selectedBox === null ? 0 : (selectedBox + 1) % entry.boxes.length;
+    selectBox(next);
+}
+
+function prevBox() {
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    if (!entry.boxes.length) return;
+    const prev = selectedBox === null ? entry.boxes.length - 1 : (selectedBox - 1 + entry.boxes.length) % entry.boxes.length;
+    selectBox(prev);
+}
+
+// ── VIN 스트립 ────────────────────────────────────────────
+function updateVinStrip() {
+    const strip = document.getElementById('vinStrip');
+    strip.innerHTML = '';
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    if (!entry.xmlFile) return;
+    entry.boxes.forEach((box, i) => {
+        const el = document.createElement('div');
+        el.className = 'vin-char' + (i === selectedBox ? ' selected' : '');
+        el.textContent = box.label;
+        el.onclick = () => selectBox(i);
+        strip.appendChild(el);
+    });
+}
+
+// ── 보기 모드 토글 ────────────────────────────────────────
+function toggleViewMode() {
+    viewMode = viewMode === 'all' ? 'single' : 'all';
+    const btn = document.getElementById('btnViewMode');
+    btn.textContent = viewMode === 'all' ? '전체 박스' : '선택 박스만';
+    btn.className = viewMode === 'all' ? 'btn btn-toggle active' : 'btn btn-toggle';
+    drawCanvas();
+}
+
+// ── 좌표 편집 ─────────────────────────────────────────────
+function setCoordInputsEnabled(enabled) {
+    ['coordXmin','coordYmin','coordXmax','coordYmax'].forEach(id => {
+        document.getElementById(id).disabled = !enabled;
+        if (!enabled) document.getElementById(id).value = '';
+    });
+    document.getElementById('btnCoordApply').disabled = !enabled;
+}
+
+function applyCoords() {
+    if (selectedBox === null || currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    const box = entry.boxes[selectedBox];
+
+    const newXmin = parseInt(document.getElementById('coordXmin').value);
+    const newYmin = parseInt(document.getElementById('coordYmin').value);
+    const newXmax = parseInt(document.getElementById('coordXmax').value);
+    const newYmax = parseInt(document.getElementById('coordYmax').value);
+
+    if (isNaN(newXmin) || isNaN(newYmin) || isNaN(newXmax) || isNaN(newYmax)) {
+        alert('모든 좌표를 숫자로 입력하세요.'); return;
+    }
+    if (newXmin >= newXmax || newYmin >= newYmax) {
+        alert('xmin < xmax, ymin < ymax 이어야 합니다.'); return;
+    }
+
+    // undo 용 이전 좌표 저장
+    const oldCoords = { xmin: box.xmin, ymin: box.ymin, xmax: box.xmax, ymax: box.ymax };
+    box.xmin = newXmin; box.ymin = newYmin; box.xmax = newXmax; box.ymax = newYmax;
+    box.modified = true;
+    entry.dirty = true;
+
+    // XML DOM 업데이트
+    if (entry.xmlDoc) {
+        const objects = entry.xmlDoc.querySelectorAll('object');
+        if (objects[box.index]) {
+            const bndbox = objects[box.index].querySelector('bndbox');
+            if (bndbox) {
+                bndbox.querySelector('xmin').textContent = newXmin;
+                bndbox.querySelector('ymin').textContent = newYmin;
+                bndbox.querySelector('xmax').textContent = newXmax;
+                bndbox.querySelector('ymax').textContent = newYmax;
+            }
+        }
+    }
+
+    undoStack.push({ entryIdx: currentIndex, boxIdx: selectedBox, oldLabel: box.label, newLabel: box.label, oldCoords, newCoords: { xmin: newXmin, ymin: newYmin, xmax: newXmax, ymax: newYmax } });
+    updateListItem(currentIndex);
+    updateStatusFromEntries();
+    drawCanvas();
+
+    document.getElementById('boxInfo').textContent =
+        `박스 #${selectedBox+1}/${entry.boxes.length}  |  현재 라벨: [${box.label}]  |  위치: (${box.xmin},${box.ymin})-(${box.xmax},${box.ymax})`;
+}
+
+// ── 되돌리기 ──────────────────────────────────────────────
+function undo() {
+    if (!undoStack.length) return;
+    const action = undoStack.pop();
+    const { entryIdx, boxIdx, oldLabel } = action;
+    const entry = entries[entryIdx];
+    const box = entry.boxes[boxIdx];
+    box.label = oldLabel;
+
+    // 좌표 복원
+    if (action.oldCoords) {
+        box.xmin = action.oldCoords.xmin;
+        box.ymin = action.oldCoords.ymin;
+        box.xmax = action.oldCoords.xmax;
+        box.ymax = action.oldCoords.ymax;
+    }
+
+    box.modified = false;
+
+    // XML DOM 복원
+    if (entry.xmlDoc) {
+        const objects = entry.xmlDoc.querySelectorAll('object');
+        if (objects[box.index]) {
+            const nameEl = objects[box.index].querySelector('name');
+            if (nameEl) nameEl.textContent = oldLabel;
+            if (action.oldCoords) {
+                const bndbox = objects[box.index].querySelector('bndbox');
+                if (bndbox) {
+                    bndbox.querySelector('xmin').textContent = action.oldCoords.xmin;
+                    bndbox.querySelector('ymin').textContent = action.oldCoords.ymin;
+                    bndbox.querySelector('xmax').textContent = action.oldCoords.xmax;
+                    bndbox.querySelector('ymax').textContent = action.oldCoords.ymax;
+                }
+            }
+        }
+    }
+
+    entry.dirty = entry.boxes.some(b => b.modified);
+    updateListItem(entryIdx);
+    updateStatusFromEntries();
+    if (entryIdx === currentIndex) {
+        updateVinStrip();
+        drawCanvas();
+        if (selectedBox === boxIdx) selectBox(boxIdx);
+    }
+}
+
+// ── 원본 XML 보존 저장 ────────────────────────────────────
+function buildModifiedXml(entry) {
+    // 원본 텍스트에서 <object>...</object> 블록만 찾아 수정된 값을 텍스트 치환
+    let xml = entry.xmlText;
+
+    // 수정된 박스를 원본 index 기준으로 모아둠
+    const modifiedByIndex = {};
+    entry.boxes.forEach(box => {
+        if (box.modified) modifiedByIndex[box.index] = box;
+    });
+
+    if (Object.keys(modifiedByIndex).length === 0) return xml;
+
+    // <object>...</object> 블록을 순서대로 찾아서 치환
+    let objIdx = 0;
+    xml = xml.replace(/<object>([\s\S]*?)<\/object>/g, (fullMatch, inner) => {
+        const curIdx = objIdx++;
+        const box = modifiedByIndex[curIdx];
+        if (!box) return fullMatch; // 수정 안 된 블록은 그대로
+
+        let result = inner;
+        // <name> 치환
+        result = result.replace(/<name>[^<]*<\/name>/, `<name>${box.label}</name>`);
+        // <bndbox> 내부 좌표 치환
+        result = result.replace(/<xmin>[^<]*<\/xmin>/, `<xmin>${box.xmin}</xmin>`);
+        result = result.replace(/<ymin>[^<]*<\/ymin>/, `<ymin>${box.ymin}</ymin>`);
+        result = result.replace(/<xmax>[^<]*<\/xmax>/, `<xmax>${box.xmax}</xmax>`);
+        result = result.replace(/<ymax>[^<]*<\/ymax>/, `<ymax>${box.ymax}</ymax>`);
+
+        return `<object>${result}</object>`;
+    });
+
+    return xml;
+}
+
+// ── 저장 ──────────────────────────────────────────────────
+function saveAll() {
+    const dirtyEntries = entries.filter(e => e.dirty && e.xmlText);
+    if (!dirtyEntries.length) { alert('수정된 내용이 없습니다.'); return; }
+    dirtyEntries.forEach(entry => {
+        const xmlStr = buildModifiedXml(entry);
+        const blob = new Blob([xmlStr], { type: 'application/xml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = entry.filename.replace(/\.[^.]+$/, '.xml');
+        a.click();
+        URL.revokeObjectURL(a.href);
+        // 저장 후 원본 텍스트를 갱신 (이후 추가 수정 시 기준)
+        entry.xmlText = xmlStr;
+        entry.dirty = false;
+        entry.boxes.forEach(b => b.modified = false);
+    });
+    populateList();
+    if (currentIndex >= 0) {
+        const items = document.querySelectorAll('#fileList .file-item');
+        if (items[currentIndex]) items[currentIndex].classList.add('active');
+    }
+    updateStatusFromEntries();
+    alert(`${dirtyEntries.length}개 XML 파일이 다운로드되었습니다.`);
+}
+
+async function downloadAll() {
+    const dirtyEntries = entries.filter(e => e.dirty && e.xmlText);
+    if (!dirtyEntries.length) { alert('수정된 내용이 없습니다.'); return; }
+
+    // ZIP 미지원 시 개별 다운로드로 fallback
+    if (typeof JSZip === 'undefined') {
+        try {
+            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+        } catch {
+            saveAll();
+            return;
+        }
+    }
+
+    const zip = new JSZip();
+    dirtyEntries.forEach(entry => {
+        const xmlStr = buildModifiedXml(entry);
+        const xmlName = entry.filename.replace(/\.[^.]+$/, '.xml');
+        zip.file(xmlName, xmlStr);
+    });
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'modified_labels.zip';
+    a.click();
+    URL.revokeObjectURL(a.href);
+
+    dirtyEntries.forEach(entry => {
+        entry.xmlText = buildModifiedXml(entry);
+        entry.dirty = false;
+        entry.boxes.forEach(b => b.modified = false);
+    });
+    populateList();
+    if (currentIndex >= 0) {
+        const items = document.querySelectorAll('#fileList .file-item');
+        if (items[currentIndex]) items[currentIndex].classList.add('active');
+    }
+    updateStatusFromEntries();
+    alert(`${dirtyEntries.length}개 수정된 XML이 ZIP으로 다운로드되었습니다.`);
+}
+
+function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+}
+
+// ── 상태 업데이트 ─────────────────────────────────────────
+function updateStatus(matched, unmatched) {
+    const dirty = entries.filter(e => e.dirty).length;
+    document.getElementById('bottomStatus').textContent =
+        `총 ${entries.length}개  |  매칭: ${matched}  |  미매칭: ${unmatched}  |  수정됨: ${dirty}`;
+}
+
+function updateStatusFromEntries() {
+    const matched = entries.filter(e => e.xmlFile).length;
+    updateStatus(matched, entries.length - matched);
+}
+
+// ── 키보드 단축키 ─────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+    const isInput = e.target.tagName === 'INPUT';
+
+    if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveAll(); return; }
+    if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
+
+    if (isInput && e.target.id === 'labelInput') {
+        if (e.key === 'Enter') { e.preventDefault(); applyLabel(); return; }
+        if (e.key === 'Escape') { e.preventDefault(); deselectBox(); return; }
+        if (e.key === 'Tab') { e.preventDefault(); e.shiftKey ? prevBox() : nextBox(); return; }
+        return;
+    }
+
+    if (isInput) return;
+
+    if (e.key === 'a' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (currentIndex > 0) selectEntry(currentIndex - 1);
+    } else if (e.key === 'd' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (currentIndex < entries.length - 1) selectEntry(currentIndex + 1);
+    } else if (e.key === 'Tab') {
+        e.preventDefault();
+        e.shiftKey ? prevBox() : nextBox();
+    } else if (e.key === 'Escape') {
+        deselectBox();
+    } else if (e.key === 'v') {
+        toggleViewMode();
+    }
+});
+</script>
+</body>
+</html>
