@@ -50,6 +50,9 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 .cell .cap { font-size: 9px; color: #999; text-align: center; padding: 2px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cell.selected { border-color: #4ecdc4; box-shadow: 0 0 0 2px #4ecdc4 inset; }
 .cell.problem { border-color: #ff2d2d; }
+.cell.unable { border-color: #ffb000; }
+.cell.unable::after { content: '🚫'; position: absolute; top: 2px; left: 2px; font-size: 15px; text-shadow: 0 0 3px #000; }
+.label-item.unable-group .chip { background: #ffb000; color: #1a1a2e; }
 .cell.edited { border-color: #f6c744; }
 .cell .flagbtn { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border: none; border-radius: 4px; background: rgba(40,40,60,0.8); color: #ff8080; font-size: 13px; cursor: pointer; line-height: 22px; text-align: center; padding: 0; }
 .cell .flagbtn:hover { background: rgba(255,45,45,0.85); color: #fff; }
@@ -96,6 +99,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
             <input type="text" class="label-in" id="labelInput" maxlength="1" disabled>
             <button class="btn btn-primary" id="btnApply" disabled onclick="applyLabel()">적용</button>
             <button class="btn" id="btnFlag" disabled onclick="toggleProblem()">&#9873; 문제 표시</button>
+            <button class="btn" id="btnUnable" disabled onclick="toggleUnable()">&#128683; 작업 불가</button>
             <button class="btn" id="btnOriginal" disabled onclick="openOriginal()">&#128269; 원본 보기</button>
             <span class="hint">크롭 클릭 → 선택 · 라벨 입력 후 Enter · q=문제표시 · 더블클릭/o=원본</span>
         </div>
@@ -122,6 +126,7 @@ let currentLabel = null;    // 선택된 라벨 그룹 (또는 '__PROBLEM__')
 let selectedCell = null;    // 선택된 DOM cell
 
 const PROBLEM_GROUP = '__PROBLEM__';
+const UNABLE_GROUP = '__UNABLE__';
 
 const COLORS = [
     "#FF4444","#44FF44","#4488FF","#FFFF44","#FF44FF","#44FFFF",
@@ -209,6 +214,7 @@ function rebuild() {
         entries.push({
             dataID: rec.dataID != null ? String(rec.dataID) : '',
             filename: fn, imageFile: img, record: rec, nameKey: nk, boxes,
+            unableToWork: false, unableReason: '',
         });
     });
 
@@ -247,6 +253,12 @@ function problemRefs() {
     return refs;
 }
 
+function unableRefs() {
+    const refs = [];
+    entries.forEach((e, ei) => { if (e.unableToWork) e.boxes.forEach((b, bi) => refs.push({ entryIdx: ei, boxIdx: bi })); });
+    return refs;
+}
+
 // ── 사이드바 ──────────────────────────────────────────────
 function renderLabelList() {
     const list = document.getElementById('labelList');
@@ -259,6 +271,14 @@ function renderLabelList() {
     pdiv.innerHTML = `<span class="chip">&#9873;</span><span>문제 표시</span><span class="cnt">${pc}</span>`;
     pdiv.onclick = () => selectLabel(PROBLEM_GROUP);
     list.appendChild(pdiv);
+
+    // 작업 불가 그룹
+    const uc = unableRefs().length;
+    const udiv = document.createElement('div');
+    udiv.className = 'label-item unable-group' + (currentLabel === UNABLE_GROUP ? ' active' : '');
+    udiv.innerHTML = `<span class="chip">&#128683;</span><span>작업 불가</span><span class="cnt">${uc}</span>`;
+    udiv.onclick = () => selectLabel(UNABLE_GROUP);
+    list.appendChild(udiv);
 
     const labels = [...labelIndex.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     labels.forEach(lb => {
@@ -321,12 +341,15 @@ function selectLabel(label) {
     setEditEnabled(false);
     renderLabelList();
     document.getElementById('cropInfo').textContent =
-        (label === PROBLEM_GROUP ? '문제 표시된 크롭' : `라벨 [${label === '' ? '빈값' : label}]`) + ' 그룹';
+        (label === PROBLEM_GROUP ? '문제 표시된 크롭'
+            : label === UNABLE_GROUP ? '작업 불가 프레임의 크롭'
+            : `라벨 [${label === '' ? '빈값' : label}]`) + ' 그룹';
     renderGrid();
 }
 
 function refsForCurrent() {
     if (currentLabel === PROBLEM_GROUP) return problemRefs();
+    if (currentLabel === UNABLE_GROUP) return unableRefs();
     return (labelIndex.get(currentLabel) || []).slice();
 }
 
@@ -346,7 +369,7 @@ function renderGrid() {
         const entry = entries[ref.entryIdx];
         const box = entry.boxes[ref.boxIdx];
         const cell = document.createElement('div');
-        cell.className = 'cell' + (box.problem ? ' problem' : '') + (box.dirty ? ' edited' : '');
+        cell.className = 'cell' + (entry.unableToWork ? ' unable' : '') + (box.problem ? ' problem' : '') + (box.dirty ? ' edited' : '');
         cell.dataset.entryIdx = ref.entryIdx;
         cell.dataset.boxIdx = ref.boxIdx;
         cell._drawn = false;
@@ -436,18 +459,21 @@ function selectCell(cell) {
     const entry = entries[+cell.dataset.entryIdx];
     const box = entry.boxes[+cell.dataset.boxIdx];
     document.getElementById('cropInfo').textContent =
-        `dataID ${entry.dataID} · ${box.objectID} · 라벨 [${box.label === '' ? '빈값' : box.label}]` + (box.problem ? ' · ⚑문제' : '');
+        `dataID ${entry.dataID} · ${box.objectID} · 라벨 [${box.label === '' ? '빈값' : box.label}]` +
+        (box.problem ? ' · ⚑문제' : '') + (entry.unableToWork ? ' · 🚫작업불가' : '');
     setEditEnabled(true);
     const inp = document.getElementById('labelInput');
     inp.value = box.label;
     inp.focus(); inp.select();
     updateFlagBtn(box);
+    updateUnableBtn(entry);
 }
 
 function setEditEnabled(on) {
     document.getElementById('labelInput').disabled = !on;
     document.getElementById('btnApply').disabled = !on;
     document.getElementById('btnFlag').disabled = !on;
+    document.getElementById('btnUnable').disabled = !on;
     document.getElementById('btnOriginal').disabled = !on;
     if (!on) document.getElementById('labelInput').value = '';
 }
@@ -456,6 +482,12 @@ function updateFlagBtn(box) {
     const btn = document.getElementById('btnFlag');
     btn.className = 'btn' + (box.problem ? ' btn-primary' : '');
     btn.innerHTML = box.problem ? '⚑ 문제 해제' : '⚑ 문제 표시';
+}
+
+function updateUnableBtn(entry) {
+    const btn = document.getElementById('btnUnable');
+    btn.className = 'btn' + (entry && entry.unableToWork ? ' btn-primary' : '');
+    btn.innerHTML = (entry && entry.unableToWork) ? '🚫 작업불가 해제' : '🚫 작업 불가';
 }
 
 function currentBox() {
@@ -489,7 +521,7 @@ function applyLabel() {
     const removed = selectedCell;
     selectedCell = null;
     setEditEnabled(false);
-    if (currentLabel !== PROBLEM_GROUP && currentLabel !== newLabel) {
+    if (currentLabel !== PROBLEM_GROUP && currentLabel !== UNABLE_GROUP && currentLabel !== newLabel) {
         removed.remove();
     } else {
         removed.classList.add('edited');
@@ -514,33 +546,70 @@ function toggleProblem() {
     updateStatus();
 }
 
+function toggleUnable() {
+    if (!selectedCell) return;
+    const entry = entries[+selectedCell.dataset.entryIdx];
+    if (!entry.unableToWork) {
+        const r = prompt('작업 불가 사유 (선택 입력, 취소 시 표시 안 함)', entry.unableReason || '');
+        if (r === null) return;   // 취소
+        entry.unableToWork = true;
+        entry.unableReason = r.trim();
+    } else {
+        entry.unableToWork = false;
+        entry.unableReason = '';
+    }
+    // 같은 프레임(dataID)의 현재 화면 셀 전부 표시 갱신
+    document.querySelectorAll('#grid .cell').forEach(c => {
+        if (+c.dataset.entryIdx === +selectedCell.dataset.entryIdx) c.classList.toggle('unable', entry.unableToWork);
+    });
+    // 작업불가 그룹을 보는 중 해제하면 목록에서 제거
+    if (currentLabel === UNABLE_GROUP && !entry.unableToWork) {
+        document.querySelectorAll('#grid .cell').forEach(c => { if (+c.dataset.entryIdx === +selectedCell.dataset.entryIdx) c.remove(); });
+        selectedCell = null; setEditEnabled(false);
+    } else {
+        updateUnableBtn(entry);
+    }
+    renderLabelList();
+    updateStatus();
+}
+
 // ── 다운로드 ──────────────────────────────────────────────
 function saveJson() {
     const recs = entries.filter(e => e.record);
     if (!recs.length) { alert('저장할 데이터가 없습니다.'); return; }
-    const ndjson = recs.map(e => JSON.stringify(e.record)).join('\n') + '\n';
+    const ndjson = recs.map(e => {
+        if (e.unableToWork) {
+            const clone = Object.assign({}, e.record, { unableToWork: 1 });
+            if (e.nameKey && clone[e.nameKey]) clone[e.nameKey] = Object.assign({}, clone[e.nameKey], { data: [] });
+            return JSON.stringify(clone);
+        }
+        return JSON.stringify(e.record);
+    }).join('\n') + '\n';
     downloadBlob(ndjson, 'application/json', jsonFileName.replace(/\.[^.]+$/, '') + '_reviewed.json');
     const edited = entries.reduce((s, e) => s + e.boxes.filter(b => b.dirty).length, 0);
     alert(`교정 JSON 저장 완료 (${recs.length}개 레코드, 라벨수정 ${edited}건).`);
 }
 
 function exportCsv() {
-    const header = ['dataID', 'filename', 'problemBoxCount', 'problemLabels', 'problemObjectIDs'];
+    const header = ['dataID', 'filename', 'type', 'problemBoxCount', 'problemLabels', 'problemObjectIDs', 'reason'];
     const rows = [];
+    // dataID 단위 1행, 중복 없음. 작업불가면 작업불가 행(어노테이션 삭제되므로 문제행 대신), 아니면 문제 행
     entries.forEach(e => {
+        if (e.unableToWork) {
+            rows.push([e.dataID, e.filename, '작업불가', '', '', '', '작업불가 처리' + (e.unableReason ? ' — ' + e.unableReason : '')]);
+            return;
+        }
         const pbs = e.boxes.filter(b => b.problem);
-        if (!pbs.length) return;   // dataID 단위 1행, 중복 없음
-        rows.push([
-            e.dataID, e.filename, pbs.length,
-            pbs.map(b => b.label).join(' '),
-            pbs.map(b => b.objectID).join(' '),
-        ]);
+        if (!pbs.length) return;
+        rows.push([e.dataID, e.filename, '문제', pbs.length, pbs.map(b => b.label).join(' '), pbs.map(b => b.objectID).join(' '), '']);
     });
-    if (!rows.length) { alert('문제로 표시된 크롭이 없습니다.'); return; }
+    if (!rows.length) { alert('문제/작업불가로 표시된 항목이 없습니다.'); return; }
     const lines = [header, ...rows].map(r => r.map(csvCell).join(','));
     const csv = '﻿' + lines.join('\r\n') + '\r\n';
     downloadBlob(csv, 'text/csv;charset=utf-8;', jsonFileName.replace(/\.[^.]+$/, '') + '_problems.csv');
-    alert(`문제 CSV 저장 완료 — ${rows.length}개 dataID (중복 제거).`);
+    const unableN = rows.filter(r => r[2] === '작업불가').length;
+    const probN = rows.filter(r => r[2] === '문제').length;
+    alert(`CSV 저장 완료 — 작업불가 ${unableN}건, 문제 ${probN}건 (총 ${rows.length}개 dataID, 중복 제거).`);
 }
 
 function downloadBlob(content, type, name) {
@@ -557,8 +626,9 @@ function updateStatus() {
     const edited = entries.reduce((s, e) => s + e.boxes.filter(b => b.dirty).length, 0);
     const probBoxes = entries.reduce((s, e) => s + e.boxes.filter(b => b.problem).length, 0);
     const probFrames = entries.filter(e => e.boxes.some(b => b.problem)).length;
+    const unable = entries.filter(e => e.unableToWork).length;
     document.getElementById('bottomStatus').textContent =
-        `크롭 ${totalBoxes()} · 라벨수정 ${edited} · 문제박스 ${probBoxes} · 문제프레임(dataID) ${probFrames}`;
+        `크롭 ${totalBoxes()} · 라벨수정 ${edited} · 문제박스 ${probBoxes} · 문제프레임(dataID) ${probFrames} · 작업불가 ${unable}`;
 }
 
 // ── 원본 이미지 모달 ──────────────────────────────────────
@@ -616,6 +686,23 @@ async function drawOriginal() {
             ctx.fillStyle = textColorFor(color); ctx.fillText(t, x + 3, ly + 12);
         }
     });
+
+    // 작업 불가 오버레이
+    if (entry.unableToWork) {
+        ctx.fillStyle = 'rgba(30,30,30,0.5)';
+        ctx.fillRect(ox, oy, sw, sh);
+        ctx.strokeStyle = '#ffb000'; ctx.lineWidth = 6;
+        ctx.strokeRect(ox + 3, oy + 3, sw - 6, sh - 6);
+        ctx.fillStyle = 'rgba(255,176,0,0.95)';
+        ctx.font = 'bold 34px "Malgun Gothic", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🚫 작 업 불 가', ox + sw / 2, oy + sh / 2);
+        if (entry.unableReason) {
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 16px "Malgun Gothic", sans-serif';
+            ctx.fillText(entry.unableReason, ox + sw / 2, oy + sh / 2 + 30);
+        }
+        ctx.textAlign = 'left';
+    }
 }
 
 function closeOriginal() {
