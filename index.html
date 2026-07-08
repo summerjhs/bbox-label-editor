@@ -122,6 +122,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
             <button class="btn" id="btnNextBox" disabled onclick="nextBox()">다음 박스 &rarr;</button>
             <button class="btn btn-flag" id="btnFlagBox" disabled onclick="toggleBoxFlag()">&#9873; 박스 문제</button>
             <button class="btn btn-flag" id="btnFlagFrame" disabled onclick="toggleFrameFlag()">&#9873; 프레임 문제</button>
+            <button class="btn btn-flag" id="btnUnable" disabled onclick="toggleUnable()">&#128683; 작업 불가</button>
             <label style="font-size:12px;color:#aaa;">사유:</label>
             <input type="text" class="reason-in" id="flagReasonInput" placeholder="문제 사유 (선택)" disabled>
         </div>
@@ -263,6 +264,8 @@ function rebuildEntries() {
             dirty: false,
             frameFlag: false,
             frameReason: '',
+            unableToWork: false,
+            unableReason: '',
             hasRecord: true,
             hasImage: !!img,
         });
@@ -274,6 +277,7 @@ function rebuildEntries() {
         list.push({
             dataID: '', filename: name, imageFile: f, record: null, nameKey: null,
             boxes: [], dirty: false, frameFlag: false, frameReason: '',
+            unableToWork: false, unableReason: '',
             hasRecord: false, hasImage: true,
         });
     });
@@ -303,6 +307,7 @@ function entryLabelText(entry) {
     let prefix = '';
     if (!entry.hasRecord) prefix += '[작업불가] ';
     else if (!entry.hasImage) prefix += '[이미지없음] ';
+    if (entry.unableToWork) prefix += '🚫 ';
     if (entry.frameFlag) prefix += '⚑ ';
     if (entry.dirty) prefix += '* ';
     const idPart = entry.dataID ? entry.dataID + ' · ' : '';
@@ -313,7 +318,7 @@ function itemClass(entry, idx) {
     let cls = 'file-item';
     if (!entry.hasRecord) cls += ' unmatched';
     if (entry.dirty) cls += ' dirty';
-    if (entry.frameFlag || entry.boxes.some(b => b.flagged)) cls += ' flagged';
+    if (entry.frameFlag || entry.unableToWork || entry.boxes.some(b => b.flagged)) cls += ' flagged';
     if (idx === currentIndex) cls += ' active';
     return cls;
 }
@@ -352,7 +357,7 @@ function updateListItem(idx) {
 }
 
 function isProblem(entry) {
-    return entry.frameFlag || entry.boxes.some(b => b.flagged);
+    return entry.frameFlag || entry.unableToWork || entry.boxes.some(b => b.flagged);
 }
 
 function applyListFilter() {
@@ -402,8 +407,10 @@ function selectEntry(idx) {
     document.getElementById('btnNextBox').disabled = !hasBoxes;
     document.getElementById('btnFlagBox').disabled = true;
     document.getElementById('btnFlagFrame').disabled = !entry.hasRecord;
+    document.getElementById('btnUnable').disabled = !entry.hasRecord;
     document.getElementById('flagReasonInput').disabled = !entry.hasRecord;
-    document.getElementById('flagReasonInput').value = entry.frameFlag ? (entry.frameReason || '') : '';
+    document.getElementById('flagReasonInput').value =
+        entry.unableToWork ? (entry.unableReason || '') : (entry.frameFlag ? (entry.frameReason || '') : '');
     setCoordInputsEnabled(false);
     updateFlagButtons();
 
@@ -540,6 +547,27 @@ function drawCanvas() {
         ctx.fillRect(ox + 4, oy + 4, bw2, 22);
         ctx.fillStyle = '#fff';
         ctx.fillText(txt, ox + 10, oy + 19);
+    }
+
+    // 작업 불가 (수동 처리) 오버레이
+    if (entry.unableToWork && entry.hasRecord) {
+        ctx.fillStyle = 'rgba(30, 30, 30, 0.55)';
+        ctx.fillRect(ox, oy, sw, sh);
+        ctx.strokeStyle = '#ffb000';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(ox + 3, oy + 3, sw - 6, sh - 6);
+        ctx.save();
+        ctx.translate(ox + sw / 2, oy + sh / 2);
+        ctx.fillStyle = 'rgba(255, 176, 0, 0.95)';
+        ctx.font = 'bold 34px "Malgun Gothic", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🚫 작 업 불 가', 0, 0);
+        if (entry.unableReason) {
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 16px "Malgun Gothic", sans-serif';
+            ctx.fillText(entry.unableReason, 0, 30);
+        }
+        ctx.restore();
     }
 
     // 작업 불가 배너
@@ -698,6 +726,7 @@ function updateFlagButtons() {
     const box = (entry && selectedBox !== null) ? entry.boxes[selectedBox] : null;
     btnBox.className = 'btn btn-flag' + (box && box.flagged ? ' active' : '');
     btnFrame.className = 'btn btn-flag' + (entry && entry.frameFlag ? ' active' : '');
+    document.getElementById('btnUnable').className = 'btn btn-flag' + (entry && entry.unableToWork ? ' active' : '');
 }
 
 function toggleBoxFlag() {
@@ -725,6 +754,21 @@ function toggleFrameFlag() {
     updateListItem(currentIndex);
     updateStatusFromEntries();
     drawCanvas();
+}
+
+function toggleUnable() {
+    if (currentIndex < 0) return;
+    const entry = entries[currentIndex];
+    if (!entry.hasRecord) return;
+    entry.unableToWork = !entry.unableToWork;
+    entry.unableReason = entry.unableToWork ? document.getElementById('flagReasonInput').value.trim() : '';
+    updateFlagButtons();
+    updateListItem(currentIndex);
+    updateStatusFromEntries();
+    drawCanvas();
+    document.getElementById('boxInfo').textContent = entry.unableToWork
+        ? '🚫 작업 불가 처리됨 — 저장 시 이 프레임의 어노테이션은 JSON에서 삭제됩니다'
+        : '작업 불가 해제';
 }
 
 // ── 좌표 편집 ─────────────────────────────────────────────
@@ -817,7 +861,17 @@ function saveJson() {
     const recEntries = entries.filter(e => e.record);
     if (!recEntries.length) { alert('저장할 JSON 데이터가 없습니다.'); return; }
     // 편집 내용은 이미 각 record(srcData)에 반영되어 있음 → 그대로 직렬화
-    const ndjson = recEntries.map(e => JSON.stringify(e.record)).join('\n') + '\n';
+    // 작업 불가로 표시된 프레임은 어노테이션(data)을 비우고 unableToWork=1 로 저장 (원본 in-memory는 보존)
+    const ndjson = recEntries.map(e => {
+        if (e.unableToWork) {
+            const clone = Object.assign({}, e.record, { unableToWork: 1 });
+            if (e.nameKey && clone[e.nameKey]) {
+                clone[e.nameKey] = Object.assign({}, clone[e.nameKey], { data: [] });
+            }
+            return JSON.stringify(clone);
+        }
+        return JSON.stringify(e.record);
+    }).join('\n') + '\n';
     const blob = new Blob([ndjson], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -845,6 +899,9 @@ function exportCsv() {
     const rows = [];
     entries.forEach(e => {
         if (!e.record) return;
+        if (e.unableToWork) {
+            rows.push([e.dataID, e.filename, '작업불가', '', '', '', '', '', '', '작업불가 처리' + (e.unableReason ? ' — ' + e.unableReason : '')]);
+        }
         if (e.frameFlag) {
             rows.push([e.dataID, e.filename, 'frame', '', '', '', '', '', '', e.frameReason || '']);
         }
@@ -852,7 +909,7 @@ function exportCsv() {
             if (b.flagged) rows.push([e.dataID, e.filename, 'box', b.objectID, b.label, b.xmin, b.ymin, b.xmax, b.ymax, b.flagReason || '']);
         });
     });
-    if (!rows.length) { alert('문제로 표시된 프레임/박스가 없습니다.'); return; }
+    if (!rows.length) { alert('문제/작업불가로 표시된 항목이 없습니다.'); return; }
 
     const lines = [header, ...rows].map(r => r.map(csvCell).join(','));
     const csv = '﻿' + lines.join('\r\n') + '\r\n';   // BOM → 엑셀 한글 정상
@@ -864,7 +921,8 @@ function exportCsv() {
     URL.revokeObjectURL(a.href);
     const frameN = rows.filter(r => r[2] === 'frame').length;
     const boxN = rows.filter(r => r[2] === 'box').length;
-    alert(`CSV 추출 완료 — 프레임 ${frameN}건, 박스 ${boxN}건 (총 ${rows.length}행).`);
+    const unableN = rows.filter(r => r[2] === '작업불가').length;
+    alert(`CSV 추출 완료 — 작업불가 ${unableN}건, 프레임 ${frameN}건, 박스 ${boxN}건 (총 ${rows.length}행).`);
 }
 
 // ── 보기 모드 토글 ────────────────────────────────────────
@@ -891,8 +949,9 @@ function updateStatusFromEntries() {
     const dirty = entries.filter(e => e.dirty).length;
     const flaggedFrames = entries.filter(e => isProblem(e)).length;
     const flaggedBoxes = entries.reduce((s, e) => s + e.boxes.filter(b => b.flagged).length, 0);
+    const unable = entries.filter(e => e.unableToWork).length;
     document.getElementById('bottomStatus').textContent =
-        `총 ${total}  |  레코드 ${rec}  |  수정 ${dirty}  |  문제프레임 ${flaggedFrames}  |  문제박스 ${flaggedBoxes}`;
+        `총 ${total}  |  레코드 ${rec}  |  수정 ${dirty}  |  문제프레임 ${flaggedFrames}  |  문제박스 ${flaggedBoxes}  |  작업불가 ${unable}`;
 }
 
 // ── 키보드 단축키 ─────────────────────────────────────────
@@ -930,6 +989,8 @@ document.addEventListener('keydown', (e) => {
         if (selectedBox !== null) toggleBoxFlag();
     } else if (e.key === 'w') {
         toggleFrameFlag();
+    } else if (e.key === 'x') {
+        toggleUnable();
     }
 });
 </script>
