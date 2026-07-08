@@ -63,6 +63,14 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: #1a1a2e; }
 ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+
+/* 원본 이미지 모달 */
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.82); z-index: 50; align-items: center; justify-content: center; padding: 20px; }
+.ov-box { background: #16213e; border: 1px solid #333; border-radius: 10px; width: 96vw; height: 92vh; display: flex; flex-direction: column; overflow: hidden; }
+.ov-head { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid #333; flex-shrink: 0; }
+.ov-head #ovCaption { font-size: 13px; color: #ccc; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #000; }
+.ov-canvas-wrap canvas { display: block; }
 </style>
 </head>
 <body>
@@ -88,7 +96,8 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
             <input type="text" class="label-in" id="labelInput" maxlength="1" disabled>
             <button class="btn btn-primary" id="btnApply" disabled onclick="applyLabel()">적용</button>
             <button class="btn" id="btnFlag" disabled onclick="toggleProblem()">&#9873; 문제 표시</button>
-            <span class="hint">크롭 클릭 → 선택 · 라벨 입력 후 Enter · q=문제표시</span>
+            <button class="btn" id="btnOriginal" disabled onclick="openOriginal()">&#128269; 원본 보기</button>
+            <span class="hint">크롭 클릭 → 선택 · 라벨 입력 후 Enter · q=문제표시 · 더블클릭/o=원본</span>
         </div>
         <div class="grid-wrap" id="gridWrap">
             <div class="grid" id="grid"><div class="placeholder">이미지 폴더와 JSON을 로드한 뒤 왼쪽에서 라벨을 선택하세요.</div></div>
@@ -360,6 +369,7 @@ function renderGrid() {
         cell.appendChild(fb);
 
         cell.onclick = () => selectCell(cell);
+        cell.ondblclick = () => { selectCell(cell); openOriginal(); };
         grid.appendChild(cell);
         observer.observe(cell);
     });
@@ -438,6 +448,7 @@ function setEditEnabled(on) {
     document.getElementById('labelInput').disabled = !on;
     document.getElementById('btnApply').disabled = !on;
     document.getElementById('btnFlag').disabled = !on;
+    document.getElementById('btnOriginal').disabled = !on;
     if (!on) document.getElementById('labelInput').value = '';
 }
 
@@ -550,8 +561,76 @@ function updateStatus() {
         `크롭 ${totalBoxes()} · 라벨수정 ${edited} · 문제박스 ${probBoxes} · 문제프레임(dataID) ${probFrames}`;
 }
 
+// ── 원본 이미지 모달 ──────────────────────────────────────
+let originalRef = null;   // {entryIdx, boxIdx}
+
+function overlayVisible() { return document.getElementById('overlay').style.display === 'flex'; }
+
+async function openOriginal() {
+    if (!selectedCell) return;
+    const entryIdx = +selectedCell.dataset.entryIdx;
+    const boxIdx = +selectedCell.dataset.boxIdx;
+    const entry = entries[entryIdx];
+    if (!entry.imageFile) { alert('이 데이터에는 매칭된 원본 이미지가 없습니다.'); return; }
+    originalRef = { entryIdx, boxIdx };
+    const box = entry.boxes[boxIdx];
+    document.getElementById('ovCaption').textContent =
+        `dataID ${entry.dataID} · ${entry.filename} · 라벨 [${box.label === '' ? '빈값' : box.label}] · 박스 #${boxIdx + 1}/${entry.boxes.length}`;
+    document.getElementById('overlay').style.display = 'flex';
+    await drawOriginal();
+}
+
+async function drawOriginal() {
+    if (!originalRef) return;
+    const entry = entries[originalRef.entryIdx];
+    const img = await loadFrameImage(entry.filename);
+    if (!img || !originalRef) return;
+
+    const wrap = document.getElementById('ovCanvasWrap');
+    const cv = document.getElementById('ovCanvas');
+    const ctx = cv.getContext('2d');
+    const ww = wrap.clientWidth, wh = wrap.clientHeight;
+    cv.width = ww; cv.height = wh;
+    ctx.clearRect(0, 0, ww, wh);
+
+    const scale = Math.min(ww / img.width, wh / img.height);
+    const sw = img.width * scale, sh = img.height * scale;
+    const ox = (ww - sw) / 2, oy = (wh - sh) / 2;
+    ctx.drawImage(img, ox, oy, sw, sh);
+
+    // 같은 프레임의 모든 박스 표시 (선택 박스 강조)
+    entry.boxes.forEach((b, i) => {
+        const x = ox + b.xmin * scale, y = oy + b.ymin * scale;
+        const w = (b.xmax - b.xmin) * scale, h = (b.ymax - b.ymin) * scale;
+        const sel = i === originalRef.boxIdx;
+        ctx.strokeStyle = sel ? '#4ecdc4' : 'rgba(255,255,255,0.45)';
+        ctx.lineWidth = sel ? 2 : 1;
+        ctx.strokeRect(x, y, w, h);
+        if (sel) {
+            const color = colorForLabel(b.label);
+            ctx.font = 'bold 13px Consolas, monospace';
+            const t = b.label === '' ? '∅' : b.label;
+            const tw = ctx.measureText(t).width + 6;
+            const ly = y - 16 > oy ? y - 16 : y;
+            ctx.fillStyle = color; ctx.fillRect(x, ly, tw, 16);
+            ctx.fillStyle = textColorFor(color); ctx.fillText(t, x + 3, ly + 12);
+        }
+    });
+}
+
+function closeOriginal() {
+    originalRef = null;
+    document.getElementById('overlay').style.display = 'none';
+}
+
+window.addEventListener('resize', () => { if (overlayVisible()) drawOriginal(); });
+
 // ── 키보드 ────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
+    if (overlayVisible()) {
+        if (e.key === 'Escape') { e.preventDefault(); closeOriginal(); }
+        return;
+    }
     const inLabel = e.target.id === 'labelInput';
     if (inLabel) {
         if (e.key === 'Enter') { e.preventDefault(); applyLabel(); }
@@ -561,6 +640,7 @@ document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
     if (!selectedCell) return;
     if (e.key === 'q') { e.preventDefault(); toggleProblem(); }
+    else if (e.key === 'o' || e.key === 'O') { e.preventDefault(); openOriginal(); }
     else if (/^[a-zA-Z0-9\-]$/.test(e.key)) {
         const inp = document.getElementById('labelInput');
         inp.value = e.key.toUpperCase();
@@ -568,5 +648,17 @@ document.addEventListener('keydown', (e) => {
     }
 });
 </script>
+
+<!-- 원본 이미지 모달 -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeOriginal()">
+    <div class="ov-box">
+        <div class="ov-head">
+            <span id="ovCaption"></span>
+            <button class="btn" onclick="closeOriginal()">닫기 (Esc) &#10005;</button>
+        </div>
+        <div class="ov-canvas-wrap" id="ovCanvasWrap"><canvas id="ovCanvas"></canvas></div>
+    </div>
+</div>
+
 </body>
 </html>
